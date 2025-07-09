@@ -37,6 +37,7 @@ from flare.utils import NumpyEncoder
 from flare.atoms import FLARE_Atoms
 from flare.bffs.gp.calculator import FLARE_Calculator
 from flare.bffs.sgp.calculator import SGP_Calculator
+from flare.bffs.delta_ml import DeltaML_Calculator
 
 
 class OTF:
@@ -129,6 +130,7 @@ class OTF:
         md_kwargs,
         flare_calc=None,
         trajectory=None,
+        delta=False,
         # md args
         prev_pos_init: "ndarray" = None,
         rescale_steps: List[int] = [],
@@ -200,6 +202,11 @@ class OTF:
         self.dft_step = True
         self.dft_count = 0
         self.dft_frames = []
+        
+        # set delta-ML
+        self.delta_ML = delta
+        if self.delta_ML:
+            assert isinstance(self.flare_calc, DeltaML_Calculator)
 
         # set md
         self.dt = dt
@@ -366,6 +373,7 @@ class OTF:
                     self.update_temperature()
                     self.record_state()
 
+                    # if delta, should hold total energy, force etc.
                     gp_energy = self.atoms.potential_energy
                     gp_forces = deepcopy(self.atoms.forces)
                     gp_stress = deepcopy(self.atoms.stress)
@@ -375,13 +383,18 @@ class OTF:
                     self.last_dft_step = self.curr_step
                     self.run_dft()
 
-                    dft_forces = deepcopy(self.atoms.forces)
+                    dft_forces = train_forces = deepcopy(self.atoms.forces)
                     # some ase calculators don't have the stress property implemented
                     try:
-                        dft_stress = deepcopy(self.atoms.stress)
+                        dft_stress = train_stress = deepcopy(self.atoms.stress)
                     except PropertyNotImplementedError:
-                        dft_stress = None
-                    dft_energy = self.atoms.potential_energy
+                        dft_stress = train_stress = None
+                    dft_energy = train_energy = self.atoms.potential_energy
+                    
+                    if self.delta_ML:
+                        train_energy -= self.flare_calc.base_calc.results["energy"]
+                        train_forces -= self.flare_calc.base_calc.results["forces"]
+                        train_stress -= self.flare_calc.base_calc.results["stress"]
 
                     # run MD step & record the state
                     self.record_state()
@@ -407,9 +420,9 @@ class OTF:
                     # add max uncertainty atoms to training set
                     self.update_gp(
                         target_atoms,
-                        dft_forces,
-                        dft_stress=dft_stress,
-                        dft_energy=dft_energy,
+                        train_forces,
+                        dft_stress=train_stress,
+                        dft_energy=train_energy,
                     )
 
                     if self.write_model == 4:
@@ -470,15 +483,21 @@ class OTF:
     def initialize_train(self):
         # call dft and update positions
         self.run_dft()
-        dft_frcs = deepcopy(self.atoms.forces)
+        dft_frcs = train_frcs = deepcopy(self.atoms.forces)
 
         # some ase calculators don't have the stress property implemented
         try:
-            dft_stress = deepcopy(self.atoms.stress)
+            dft_stress = train_stress = deepcopy(self.atoms.stress)
         except PropertyNotImplementedError:
-            dft_stress = None
+            dft_stress = train_stress = None
 
-        dft_energy = self.atoms.potential_energy
+        dft_energy = train_energy = self.atoms.potential_energy
+        
+        if self.delta_ML:
+            base_energy, base_forces, base_stress = self.run_base_calc()
+            train_energy -= base_energy
+            train_frcs -= base_forces
+            train_stress -= base_stress
 
         self.update_temperature()
         self.record_state()
@@ -486,12 +505,12 @@ class OTF:
 
         # make initial gp model and predict forces
         self.update_gp(
-            self.init_atoms, dft_frcs, dft_stress=dft_stress, dft_energy=dft_energy
+            self.init_atoms, train_frcs, dft_stress=train_stress, dft_energy=train_energy
         )
 
     def initialize_md(self):
         # TODO: Turn this into a "reset" method.
-        if not isinstance(self.atoms.calc, FLARE_Calculator):
+        if not isinstance(self.atoms.calc, FLARE_Calculator) or not isinstance(self.atoms.calc, DeltaML_Calculator):
             self.flare_calc.reset()
             self.atoms.calc = self.flare_calc
 
@@ -513,7 +532,7 @@ class OTF:
         tic = time.time()
 
         # Change to FLARE calculator if necessary.
-        if not isinstance(self.atoms.calc, FLARE_Calculator):
+        if not isinstance(self.atoms.calc, FLARE_Calculator) or not isinstance(self.atoms.calc, DeltaML_Calculator):
             self.flare_calc.reset()
             self.atoms.calc = self.flare_calc
 
@@ -608,6 +627,23 @@ class OTF:
                 copyfile(ofile, dest + "/" + dt_string + filename)
         self.dft_frames.append(self.curr_step)
         self.output.write_wall_time(tic, task="Run DFT")
+        
+    def run_base_calc(self):
+        
+        tic = time.time()
+
+        f = logging.getLogger(self.output.basename + "log")
+        f.info("\nCalling base calculation for delta ML...\n")
+        
+        self.flare_calc.base_calc.reset()
+        self.flare_calc.base_calc.calculate(self.atoms)
+        base_energy = self.flare_calc.base_calc.results["energy"]
+        base_forces = self.flare_calc.base_calc.results["forces"]
+        base_stress = self.flare_calc.base_calc.results["stress"]
+        
+        self.output.write_wall_time(tic, task="Run base calculation")
+        
+        return base_energy, base_forces, base_stress
 
     def update_gp(
         self,

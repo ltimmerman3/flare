@@ -226,6 +226,11 @@ def get_sgp_calc(flare_config):
     from flare.bffs.sgp._C_flare import B2, B3, TwoBody, ThreeBody, FourBody
     from flare.bffs.sgp import SGP_Wrapper
     from flare.bffs.sgp.calculator import SGP_Calculator
+    
+    delta = flare_config.get("delta", False)
+    if delta:
+        from flare.bffs.delta_ml import DeltaML_Calculator
+        from mace.calculators import mace_mp
 
     sgp_file = flare_config.get("file", None)
 
@@ -238,6 +243,10 @@ def get_sgp_calc(flare_config):
             else:
                 sgp, kernels = SGP_Wrapper.from_file(sgp_file)
                 flare_calc = SGP_Calculator(sgp)
+        if delta:
+            mace_calc = mace_mp(model="/home/lucas/raw_data/potentials/MACE/mace-mpa-0-medium.model", dispersion=False, default_dtype="float32", device='cpu')
+            delta_calc = DeltaML_Calculator(flare_calc, base_calculator=mace_calc)
+            return delta_calc, kernels
         return flare_calc, kernels
 
     kernels = flare_config.get("kernels")
@@ -343,6 +352,11 @@ def get_sgp_calc(flare_config):
     )
 
     flare_calc = SGP_Calculator(sgp, use_mapping)
+    
+    if delta:
+        mace_calc = mace_mp(model="/home/lucas/raw_data/potentials/MACE/mace-mpa-0-medium.model", dispersion=False, default_dtype="float32", device='cpu')
+        delta_calc = DeltaML_Calculator(flare_calc, base_calculator=mace_calc)
+        return delta_calc, kernels
     return flare_calc, kernels
 
 
@@ -410,3 +424,6 @@ def main():
         fresh_start_otf(config)
     elif mode == "restart":
         restart_otf(config)
+        
+# if __name__ == "__main__":
+#     main()
