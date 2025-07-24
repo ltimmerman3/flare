@@ -383,10 +383,12 @@ class OTF:
                     self.last_dft_step = self.curr_step
                     self.run_dft()
 
-                    dft_forces = train_forces = deepcopy(self.atoms.forces)
+                    dft_forces = deepcopy(self.atoms.forces)
+                    train_forces = deepcopy(self.atoms.forces)
                     # some ase calculators don't have the stress property implemented
                     try:
-                        dft_stress = train_stress = deepcopy(self.atoms.stress)
+                        dft_stress = deepcopy(self.atoms.stress)
+                        train_stress = deepcopy(self.atoms.stress)
                     except PropertyNotImplementedError:
                         dft_stress = train_stress = None
                     dft_energy = train_energy = self.atoms.potential_energy
@@ -483,11 +485,13 @@ class OTF:
     def initialize_train(self):
         # call dft and update positions
         self.run_dft()
-        dft_frcs = train_frcs = deepcopy(self.atoms.forces)
+        dft_frcs = deepcopy(self.atoms.forces)
+        train_frcs = deepcopy(self.atoms.forces)
 
         # some ase calculators don't have the stress property implemented
         try:
-            dft_stress = train_stress = deepcopy(self.atoms.stress)
+            dft_stress = deepcopy(self.atoms.stress)
+            train_stress = deepcopy(self.atoms.stress)
         except PropertyNotImplementedError:
             dft_stress = train_stress = None
 

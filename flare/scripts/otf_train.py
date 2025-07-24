@@ -88,6 +88,10 @@ def get_dft_calc(dft_config):
         dft_calc = FakeDFT(**dft_calc_kwargs)
         dft_calc.set(**dft_calc_params)
         return dft_calc
+    elif dft_calc_name == "SPARC":
+        from sparc.calculator import SPARC
+        dft_calc = SPARC(**dft_calc_kwargs)
+        return dft_calc
 
     # find the module including the ASE DFT calculator class by name
     dft_module_name = ""
@@ -244,7 +248,7 @@ def get_sgp_calc(flare_config):
                 sgp, kernels = SGP_Wrapper.from_file(sgp_file)
                 flare_calc = SGP_Calculator(sgp)
         if delta:
-            mace_calc = mace_mp(model="/home/lucas/raw_data/potentials/MACE/mace-mpa-0-medium.model", dispersion=False, default_dtype="float32", device='cpu')
+            mace_calc = mace_mp(model="/storage/home/hcoda1/9/ltimmerman3/p-amedford6-0/potentials/MACE/mace-mpa-0-medium.model", dispersion=False, default_dtype="float32", device='cpu')
             delta_calc = DeltaML_Calculator(flare_calc, base_calculator=mace_calc)
             return delta_calc, kernels
         return flare_calc, kernels
@@ -354,7 +358,7 @@ def get_sgp_calc(flare_config):
     flare_calc = SGP_Calculator(sgp, use_mapping)
     
     if delta:
-        mace_calc = mace_mp(model="/home/lucas/raw_data/potentials/MACE/mace-mpa-0-medium.model", dispersion=False, default_dtype="float32", device='cpu')
+        mace_calc = mace_mp(model="/storage/home/hcoda1/9/ltimmerman3/p-amedford6-0/potentials/MACE/mace-mpa-0-medium.model", dispersion=False, default_dtype="float32", device='cpu')
         delta_calc = DeltaML_Calculator(flare_calc, base_calculator=mace_calc)
         return delta_calc, kernels
     return flare_calc, kernels

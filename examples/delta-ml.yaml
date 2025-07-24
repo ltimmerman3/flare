@@ -1,9 +1,9 @@
 # Super cell is read from a file such as POSCAR, xyz, lammps-data
 # or any format that ASE supports
 supercell: 
-    file: bulk_Al.traj                # File of the super cell structure 
+    file: Al_compare.traj                # File of the super cell structure 
     format: traj                                       # Any format that ASE supports: https://wiki.fysik.dtu.dk/ase/ase/io/io.html
-    replicate: [2, 2, 2]                                # Replicate the super cell in the x, y, z direction
+    replicate: [1, 1, 1]                                # Replicate the super cell in the x, y, z direction
     jitter: 0.01                                         # Amplitude of random perturbation of the atomic positions
 
 # Set up FLARE calculator with (sparse) Gaussian process
@@ -30,7 +30,7 @@ flare_calc:
         - 13                                            # List all atomic numbers in the structure
     cutoff: 5.0                                         # If the "cutoff_matrix" is not set, then the "cutoff" value will be applied to all bonds. Otherwise, set the cutoff to the maximal of the cutoff_matrix
     variance_type: DTC                                # Use the local energy variance for uncertainty prediction. Other options: DTC, SOR
-    max_iterations: 1                                   # Number of iterations of each hyperparameter optimization
+    max_iterations: 5                                   # Number of iterations of each hyperparameter optimization
     use_mapping: False                                   # If True, the lammps coefficient files will be dumped, and in on-the-fly training with PyLAMMPS, it has to be True such that LAMMPS MD can be used.
 
 # Set up DFT calculator, it can be any calculator supported by ASE
@@ -39,9 +39,19 @@ flare_calc:
 # location of the VASP executable
 # point the user to the ASE documentation
 dft_calc:
-    name: EAM
+    name: SPARC
     kwargs: 
-        potential: "/home/lucas/raw_data/potentials/EAM/Al99.eam.alloy"
+        KPOINT_GRID: [4, 4, 4]
+        MESH_SPACING: 0.35
+        BC: "P P P"
+        EXCHANGE_CORRELATION: GGA_PBE
+        D3_FLAG: 1
+        TOL_SCF: 0.0001
+        MAXIT_SCF: 150
+        PRINT_ATOMS: 1
+        PRINT_VELS: 1
+        PRINT_FORCES: 1
+        CALC_STRESS: 1
     params: {}
 
 
@@ -54,9 +64,9 @@ otf:
                                                         # "PyLAMMPS" uses LAMMPS for MD in the OTF training. Check our tutorial for using FLARE + LAMMPS, and https://mir-group.github.io/flare/flare/md/lammps.html.
                                                         # "FakeMD" uses a given AIMD trajectory for an offline training. Check our tutorial for offline training, and https://mir-group.github.io/flare/flare/md/fake.html
     md_kwargs: {}
-    initial_velocity: 300                              # "file" means reading initial velocities from the supercell file. You can also set a float number like 1000, then OTF will generate random velocities based on the Boltzmann distribution at 1000 K.
+    initial_velocity: 500                              # "file" means reading initial velocities from the supercell file. You can also set a float number like 1000, then OTF will generate random velocities based on the Boltzmann distribution at 1000 K.
     dt: 0.001                                           # Unit: ps. "0.001" means the timestep is 1 fs
-    number_of_steps: 5                                  # The total number of on-the-fly training MD steps
+    number_of_steps: 10000                                  # The total number of on-the-fly training MD steps
     output_name: myotf                                  # The prefix of the output files of OTF. The log file will be <output_name>.out, and the DFT frames will be saved in <output_name>_dft.xyz
     std_tolerance_factor: -0.02                         # The uncertainty threshold above which the DFT will be called. 
                                                         # The negative sign means the absolute value is used, i.e. the threshold is 0.02. 
