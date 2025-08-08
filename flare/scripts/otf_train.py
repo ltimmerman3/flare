@@ -92,6 +92,10 @@ def get_dft_calc(dft_config):
         from sparc.calculator import SPARC
         dft_calc = SPARC(**dft_calc_kwargs)
         return dft_calc
+    elif dft_calc_name == "MACE":
+        from mace.calculators import mace_mp
+        dft_calc = mace_mp(**dft_calc_kwargs)
+        return dft_calc
 
     # find the module including the ASE DFT calculator class by name
     dft_module_name = ""
@@ -232,9 +236,11 @@ def get_sgp_calc(flare_config):
     from flare.bffs.sgp.calculator import SGP_Calculator
     
     delta = flare_config.get("delta", False)
+    mace_path = flare_config.get("mace_path", None)
+    dispersion = flare_config.get("d3", False)
     if delta:
         from flare.bffs.delta_ml import DeltaML_Calculator
-        from mace.calculators import mace_mp
+        from mace.calculators import mace_mp    
 
     sgp_file = flare_config.get("file", None)
 
@@ -248,7 +254,7 @@ def get_sgp_calc(flare_config):
                 sgp, kernels = SGP_Wrapper.from_file(sgp_file)
                 flare_calc = SGP_Calculator(sgp)
         if delta:
-            mace_calc = mace_mp(model="/storage/home/hcoda1/9/ltimmerman3/p-amedford6-0/potentials/MACE/mace-mpa-0-medium.model", dispersion=False, default_dtype="float32", device='cpu')
+            mace_calc = mace_mp(model=mace_path, dispersion=dispersion, default_dtype="float32", device='cpu')
             delta_calc = DeltaML_Calculator(flare_calc, base_calculator=mace_calc)
             return delta_calc, kernels
         return flare_calc, kernels
@@ -358,7 +364,7 @@ def get_sgp_calc(flare_config):
     flare_calc = SGP_Calculator(sgp, use_mapping)
     
     if delta:
-        mace_calc = mace_mp(model="/storage/home/hcoda1/9/ltimmerman3/p-amedford6-0/potentials/MACE/mace-mpa-0-medium.model", dispersion=False, default_dtype="float32", device='cpu')
+        mace_calc = mace_mp(model=mace_path, dispersion=dispersion, default_dtype="float32", device='cpu')
         delta_calc = DeltaML_Calculator(flare_calc, base_calculator=mace_calc)
         return delta_calc, kernels
     return flare_calc, kernels
@@ -402,7 +408,17 @@ def restart_otf(config):
 
     otf_config = config.get("otf")
     checkpoint = otf_config.get("checkpoint")
-    otf = OTF.from_checkpoint(checkpoint)
+    if otf_config.get("supercell", None) is not None:
+        atoms = io.read(
+            otf_config["supercell"]["file"])
+    else:
+        atoms = None
+    if otf_config.get("mace_path", None) is not None:
+        from mace.calculators import mace_mp
+        base_calc = mace_mp(model=otf_config["mace_path"], dispersion=False, default_dtype="float32", device='cpu')
+    else:
+        base_calc = None
+    otf = OTF.from_checkpoint(checkpoint, base_calc=base_calc, atoms=atoms)
 
     # allow modification of some parameters
     for attr in [
