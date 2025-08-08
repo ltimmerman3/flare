@@ -8,6 +8,7 @@ except Exception as e:
     warnings.warn(f"Cannot import _C_flare: {e.__class__.__name__}: {e}")
 
 from .sgp.sparse_gp import SGP_Wrapper
+from .sgp.calculator import SGP_Calculator
 import numpy as np
 import time, json
 from copy import deepcopy
@@ -176,10 +177,10 @@ class DeltaML_Calculator(Calculator):
 
     @staticmethod
     def from_file(name, base_calc = None):
+        sgp, kernels = SGP_Calculator.from_file(name)
         with open(name, "r") as f:
             gp_dict = json.loads(f.readline())
-        sgp, kernels = SGP_Wrapper.from_dict(gp_dict["gp_model"])
-        calc = DeltaML_Calculator(sgp, base_calculator = base_calc, use_mapping=gp_dict["use_mapping"])
+        calc = DeltaML_Calculator(sgp, base_calculator=base_calc, use_mapping=gp_dict["use_mapping"])
 
         return calc, kernels
 
