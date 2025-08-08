@@ -23,6 +23,7 @@ from ase.md.nvtberendsen import NVTBerendsen
 from ase.md.nptberendsen import NPTBerendsen
 from ase.md.verlet import VelocityVerlet
 from ase.md.langevin import Langevin
+from ase.md.nose_hoover_chain import NoseHooverChainNVT
 from flare.md.npt import NPT_mod
 from flare.md.nosehoover import NoseHoover
 from flare.md.lammps import LAMMPS_MD, check_sgp_match
@@ -32,7 +33,7 @@ from ase.io import read, write
 from ase.calculators.calculator import PropertyNotImplementedError
 
 from flare.io.output import Output, compute_mae
-from flare.learners.utils import is_std_in_bound, get_env_indices
+from flare.learners.utils import is_std_in_bound, is_std_in_bound_per_species, get_env_indices
 from flare.utils import NumpyEncoder
 from flare.atoms import FLARE_Atoms
 from flare.bffs.gp.calculator import FLARE_Calculator
@@ -143,7 +144,7 @@ class OTF:
         skip: int = 0,
         init_atoms: List[int] = None,
         output_name: str = "otf_run",
-        max_atoms_added: int = 1,
+        max_atoms_added: Union[int, dict] = 1,
         train_hyps: tuple = (0, 1),
         min_steps_with_model: int = 0,
         update_style: str = "add_n",
@@ -180,6 +181,8 @@ class OTF:
             MD = LAMMPS_MD
         elif md_engine == "Fake":
             MD = FakeMD
+        elif md_engine == "NoseHooverChainNVT":
+            MD = NoseHooverChainNVT
         else:
             raise NotImplementedError(md_engine + " is not implemented in ASE")
 
@@ -190,10 +193,18 @@ class OTF:
                 assert (
                     self.atoms.calc.gp_model.variance_type == "local"
                 ), "LAMMPS training only supports variance_type='local'"
-
-        self.md = MD(
-            atoms=self.atoms, timestep=timestep, trajectory=trajectory, **md_kwargs
-        )
+        if md_engine == "NoseHooverChainNVT":
+            temperature = md_kwargs.get('temperature', 473)
+            tdamp = md_kwargs.get('tdamp', 10) * units.fs
+            tchain = md_kwargs.get('tchain', 3)
+            tloop = md_kwargs.get('tloop', 1)
+            self.md = MD(
+                self.atoms, timestep, temperature, tdamp, tchain=tchain, tloop=tloop
+            )
+        else:
+            self.md = MD(
+                atoms=self.atoms, timestep=timestep, trajectory=trajectory, **md_kwargs
+            )
 
         self.flare_calc = self.atoms.calc
 
@@ -224,8 +235,11 @@ class OTF:
         # set otf
         self.std_tolerance = std_tolerance_factor
         self.skip = skip
-        if max_atoms_added < 0:
-            self.max_atoms_added = self.noa
+        if isinstance(max_atoms_added, int):
+            if max_atoms_added < 0:
+                self.max_atoms_added = self.noa
+            else:
+                self.max_atoms_added = max_atoms_added
         else:
             self.max_atoms_added = max_atoms_added
 
@@ -260,8 +274,8 @@ class OTF:
         self.last_dft_step = 0
         self.build_mode = build_mode
 
-        if self.build_mode not in ["bayesian", "direct"]:
-            raise Exception("build_mode needs to be 'bayesian' or 'direct'")
+        if self.build_mode not in ["bayesian", "bayesian_per_species", "direct"]:
+            raise Exception("build_mode needs to be 'bayesian', 'bayesian_per_species', or 'direct'")
 
         # Sanity check
         if self.build_mode == "direct":
@@ -352,6 +366,8 @@ class OTF:
                 # get max uncertainty atoms
                 if self.build_mode == "bayesian":
                     env_selection = is_std_in_bound
+                elif self.build_mode == "bayesian_per_species":
+                    env_selection = is_std_in_bound_per_species
                 elif self.build_mode == "direct":
                     env_selection = get_env_indices
 
@@ -698,7 +714,9 @@ class OTF:
             # The structure might be attached with a non-picklable calculator,
             # e.g., when we use LAMMPS empirical potential for training.
             # When deepcopy fails, create a SinglePointCalculator to store results
-
+            warnings.warn(
+                "Deepcopy failed, using SinglePointCalculator to store results from atoms Might break functionality for deltaML."
+            )
             from ase.calculators.singlepoint import SinglePointCalculator
 
             properties = ["forces", "energy", "stress"]
@@ -918,7 +936,7 @@ class OTF:
         return dct
 
     @staticmethod
-    def from_dict(dct):
+    def from_dict(dct, base_calc=None, atoms=None):
         flare_calc_dict = json.load(open(dct["flare_calc"]))
 
         # Build FLARE_Calculator from dict
@@ -933,13 +951,18 @@ class OTF:
             from flare.bffs.sgp.calculator import SGP_Calculator
 
             flare_calc, _kernels = SGP_Calculator.from_file(dct["flare_calc"])
+        elif flare_calc_dict["class"] == "DeltaML_Calculator":
+            flare_calc, _kernels = DeltaML_Calculator.from_file(dct["flare_calc"], base_calc=base_calc)
         else:
             raise TypeError(
                 f"The calculator from {dct['flare_calc']} is not recognized."
             )
 
         flare_calc.reset()
-        dct["atoms"] = read(dct["atoms"])
+        if atoms is None:
+            dct["atoms"] = read(dct["atoms"])
+        else:
+            dct["atoms"] = atoms
         dct["flare_calc"] = flare_calc
 
         try:
@@ -978,8 +1001,8 @@ class OTF:
             json.dump(self.as_dict(), f, cls=NumpyEncoder)
 
     @classmethod
-    def from_checkpoint(cls, filename):
+    def from_checkpoint(cls, filename, base_calc=None, atoms=None):
         with open(filename, "r") as f:
-            otf_model = cls.from_dict(json.loads(f.readline()))
+            otf_model = cls.from_dict(json.loads(f.readline()), base_calc=base_calc, atoms=atoms)
 
         return otf_model
