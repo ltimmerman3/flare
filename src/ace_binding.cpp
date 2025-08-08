@@ -189,7 +189,14 @@ PYBIND11_MODULE(_C_flare, m) {
       .def(py::init<double, double, Eigen::MatrixXd>());
 
   py::class_<SquaredExponential, Kernel>(m, "SquaredExponential")
-      .def(py::init<double, double>());
+      .def(py::init<double, double>())
+      .def_readonly("sigma", &SquaredExponential::sigma)
+      .def_readonly("ls", &SquaredExponential::ls)
+      .def_readonly("kernel_hyperparameters",
+                    &SquaredExponential::kernel_hyperparameters)
+      .def("envs_envs", &SquaredExponential::envs_envs)
+      .def("envs_struc", &SquaredExponential::envs_struc)
+      .def("struc_struc", &SquaredExponential::struc_struc);
 
   // Sparse GP DTC
   py::class_<SparseGP>(m, "SparseGP")
