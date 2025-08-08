@@ -9,7 +9,7 @@ from flare.atoms import FLARE_Atoms
 from flare.utils import NumpyEncoder
 
 try:
-    from ._C_flare import SparseGP, Structure, NormalizedDotProduct, B2, DotProduct
+    from ._C_flare import SparseGP, Structure, NormalizedDotProduct, B2, B3, DotProduct, SquaredExponential
 except Exception as e:
     warnings.warn(f"Cannot import _C_flare: {e.__class__.__name__}: {e}")
 
@@ -141,18 +141,27 @@ class SGP_Wrapper:
 
         # save descriptor_settings
         desc_calc = self.descriptor_calculators
-        assert (len(desc_calc) == 1) and (isinstance(desc_calc[0], B2))
-        b2_calc = desc_calc[0]
-        b2_dict = {
-            "type": "B2",
-            "radial_basis": b2_calc.radial_basis,
-            "cutoff_function": b2_calc.cutoff_function,
-            "radial_hyps": b2_calc.radial_hyps,
-            "cutoff_hyps": b2_calc.cutoff_hyps,
-            "descriptor_settings": b2_calc.descriptor_settings,
-            "cutoffs": b2_calc.cutoffs,
-        }
-        out_dict["descriptor_calculators"] = [b2_dict]
+        list_dicts = []
+        for _calc in desc_calc:
+            if isinstance(_calc, B2):
+                desc_type = "B2"
+            elif isinstance(_calc, B3):
+                desc_type = "B3"
+            else:
+                raise NotImplementedError(
+                    "Only B2 and B3 descriptors are supported in SGP_Wrapper"
+                )
+            _dict = {
+                "type": desc_type,
+                "radial_basis": _calc.radial_basis,
+                "cutoff_function": _calc.cutoff_function,
+                "radial_hyps": _calc.radial_hyps,
+                "cutoff_hyps": _calc.cutoff_hyps,
+                "descriptor_settings": _calc.descriptor_settings,
+                "cutoffs": _calc.cutoffs,
+            }
+            list_dicts.append(_dict)
+        out_dict["descriptor_calculators"] = list_dicts
 
         # save hyps
         out_dict["hyps"], out_dict["hyp_labels"] = self.hyps_and_labels
@@ -165,6 +174,8 @@ class SGP_Wrapper:
                 kernel_list.append(("NormalizedDotProduct", kern.sigma, kern.power))
             elif isinstance(kern, DotProduct):
                 kernel_list.append(("DotProduct", kern.sigma, kern.power))
+            elif isinstance(kern, SquaredExponential):
+                kernel_list.append(("SquaredExponential", kern.sigma, kern.ls))
             else:
                 raise NotImplementedError
         out_dict["kernels"] = kernel_list
@@ -292,7 +303,13 @@ class SGP_Wrapper:
             if not in_dict["stress_training"]:
                 struc_stress = np.array(None)
             else:
-                struc_stress = train_struc.stress
+                try:
+                    struc_stress = train_struc.stress
+                except AssertionError:
+                    warnings.warn(
+                        "stress_training found in input dictionary, but stress tensor missing in training structure."
+                    )
+                    struc_stress = None
 
             gp.update_db(
                 train_struc,
