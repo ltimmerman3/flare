@@ -78,93 +78,109 @@ def is_std_in_bound(
 
 
 def is_std_in_bound_per_species(
-    rel_std_tolerance: float,
-    abs_std_tolerance: float,
+    std_tolerance: float,
     noise: float,
     structure: "FLARE_Atoms",
-    max_atoms_added: int = inf,
-    max_by_species: dict = {},
+    max_atoms_added: dict = {},
+    update_style: str = "add_n",
+    update_threshold: float = None,
 ) -> (bool, List[int]):
     """
     Checks the stds of GP prediction assigned to the structure, returns a
     list of atoms which either meet an absolute threshold or a relative
-    threshold defined by rel_std_tolerance * noise. Can limit the
-    total number of target atoms via max_atoms_added, and limit per species
-    by max_by_species.
+    threshold defined by rel_std_tolerance * noise. Can limit the limit 
+    per species by max_atoms_added dictionary.
+    
+    If std_tolerance is negative, then the threshold used is the absolute
+    value of std_tolerance.
 
-    The max_atoms_added argument will 'overrule' the
-    max by species; e.g. if max_atoms_added is 2 and max_by_species is {"H":3},
-    then at most two atoms will be added.
+    If std_tolerance is positive, then the threshold used is
+    std_tolerance * noise.
 
-    :param rel_std_tolerance: Multiplied by noise to get a lower
-        bound for the uncertainty threshold defined relative to the model.
-    :param abs_std_tolerance: Used as an absolute lower bound for the
-        uncertainty threshold.
-    :param noise: Noise hyperparameter for model, used to define relative
-        uncertainty cutoff.
-    :param structure: FLARE structure decorated with
-        uncertainties in structure.stds.
-    :param max_atoms_added: Maximum number of atoms to return from structure.
-    :param max_by_species: Dictionary describing maximum number of atoms to
+    If std_tolerance is 0, then do not check.
+
+    :param std_tolerance: If positive, multiply by noise to get cutoff. If
+        negative, use absolute value of std_tolerance as cutoff.
+    :param noise: Noise variance parameter
+    :param structure: Input structure
+    :type structure: FLARE Structure
+    :param max_atoms_added: Dictionary describing maximum number of atoms to
         return by species (e.g. {'H':1,'He':2} will return at most 1 H and 2 He
         atoms.)
-    :return: Bool indicating if any atoms exceeded the uncertainty
-        threshold, and a list of indices of atoms which did, sorted by their
-        uncertainty.
+    :param update_style: A string specifying the desired strategy for
+        adding atoms to the training set. Current options are ``add_n'', which
+        adds the n = max_atoms_added highest-uncertainty atoms, and
+        ``threshold'', which adds all atoms with uncertainty greater than
+        update_threshold.
+    :param update_threshold: A float specifying the update threshold. Ignored
+        if update_style is not set to ``threshold''.
+    :return: (True,[-1]) if no atoms are above cutoff, (False,[...]) if at
+        least one atom is above std_tolerance, with the list indicating
+        which atoms have been selected for the training set.
     """
 
-    # Always returns true; use this when you want to test model performance
-    # without updating the training set.
-    if rel_std_tolerance == 0 and abs_std_tolerance == 0:
+    # set uncertainty threshold
+    if std_tolerance == 0:
         return True, [-1]
-
-    # set uncertainty threshold based on if only one or the other is passed in,
-    # and use the lower of the two.
-
-    if rel_std_tolerance is None or rel_std_tolerance == 0:
-        threshold = abs_std_tolerance
-    elif abs_std_tolerance is None or abs_std_tolerance == 0:
-        threshold = rel_std_tolerance * np.abs(noise)
+    elif std_tolerance > 0:
+        threshold = std_tolerance * np.abs(noise)
     else:
-        threshold = min(rel_std_tolerance * np.abs(noise), abs_std_tolerance)
+        threshold = np.abs(std_tolerance)
 
-    # Determine if any std component will trigger the threshold
-    # before looking through individual species.
-    max_std_components = [np.nanmax(std) for std in structure.stds]
-    if np.nanmax(max_std_components) < threshold:
-        return True, [-1]
+    nat = len(structure)
+    max_stds = np.array([np.max(s) for s in structure.stds])
+    sorted_idx = np.argsort(max_stds)  # ascending indices
 
+    # 3) Grab per-atom species list
+    if hasattr(structure, "species"):
+        species_list = structure.species
+    elif hasattr(structure, "get_chemical_symbols"):
+        species_list = structure.get_chemical_symbols()
+    else:
+        raise AttributeError(
+            "Cannot find per-atom species: please provide structure.species or structure.get_chemical_symbols()."
+        )
+
+    # 4) Build target_atoms according to style
     target_atoms = []
 
-    # Sort from greatest to smallest max. std component
-    std_arg_sorted = np.flip(np.argsort(max_std_components))
+    if update_style == "add_n":
+        # For each species in the dict, pick the top-n highest-uncertainty atoms
+        for sp, n in max_atoms_added.items():
+            # indices of that species
+            sp_inds = [i for i, s in enumerate(species_list) if s == sp]
+            # sort by uncertainty
+            sp_sorted = sorted(sp_inds, key=lambda i: max_stds[i])
+            if n > 0:
+                target_atoms.extend(sp_sorted[-n:])
 
-    present_species = {spec: 0 for spec in set(structure.symbols)}
+    elif update_style == "threshold":
+        if update_threshold is None:
+            raise ValueError("Must set update_threshold when update_style='threshold'")
 
-    # Loop through atoms and add until cutoffs are met.
-    for i in std_arg_sorted:
+        # For each species present either in the dict or in the structure:
+        all_species = set(species_list)
+        for sp in all_species:
+            # Indices of this species
+            sp_inds = [i for i, s in enumerate(species_list) if s == sp]
+            # Filter those above the threshold
+            above = [i for i in sp_inds if max_stds[i] > update_threshold]
+            # Sort descending by uncertainty
+            above_sorted = sorted(above, key=lambda i: max_stds[i], reverse=True)
+            # Cap by max_atoms_added.get(sp, unlimited)
+            cap = max_atoms_added.get(sp, len(above_sorted))
+            cap = min(cap, len(above_sorted))
+            if cap > 0:
+                target_atoms.extend(above_sorted[:cap])
 
-        # If max atoms added reached or stds of atoms considered are now below
-        # threshold, conclude
-        if len(target_atoms) == max_atoms_added or (
-            max_std_components[i] < threshold and max_std_components[i] != np.nan
-        ):
-            break
+    else:
+        raise ValueError(f"Unknown update_style '{update_style}'")
 
-        if np.isnan(max_std_components[i]):
-            continue
-
-        # Only add up to species allowance, if it exists
-        cur_spec = structure.symbols[i]
-        if present_species[cur_spec] < max_by_species.get(cur_spec, inf):
-            target_atoms.append(i)
-            present_species[cur_spec] += 1
-
-    # Check in case that nothing was added, e.g. due to species limitations
-    if len(target_atoms):
+    # 5) Final in-bound check against the overall maximum std
+    if max_stds[sorted_idx[-1]] > threshold:
         return False, target_atoms
-
-    return True, [-1]
+    else:
+        return True, [-1]
 
 
 def is_force_in_bound_per_species(
