@@ -17,7 +17,7 @@ class DeltaML_Calculator(Calculator):
     
     implemented_properties = ["energy", "forces", "stress", "stds"]
 
-    def __init__(self, sgp_calc, base_calculator = None, use_mapping=False):
+    def __init__(self, sgp_calc, base_calculator = None, use_mapping=False, offset=0.0):
         super().__init__()
         # TODO: Remove sgp_calc
         # Don't need sgp_calc, just sgp_model
@@ -29,6 +29,9 @@ class DeltaML_Calculator(Calculator):
         if base_calculator is None:
             raise RuntimeError("Must pass base calculator to use delta ML class. Exiting...")
         self.base_calc = base_calculator
+        # Energy shift to allow delta training between ML models and DFT
+        self.offset = offset
+        print("self.offset: ", self.offset)
 
     # TODO: Figure out why this is called twice per MD step.
     def calculate(self, atoms=None, properties=None, system_changes=all_changes):
@@ -59,14 +62,11 @@ class DeltaML_Calculator(Calculator):
         )
 
         self.predict_on_structure(structure_descriptor)
-        # energy = self.results["energy"]
-        # forces = self.results["forces"]
-        # stress = self.results["stress"]
         
-        self.base_calc.reset()
-        self.base_calc.calculate(atoms)
+        # self.base_calc.reset()
+        self.base_calc.calculate(atoms, ['energy', 'forces', 'stress'],[])
         
-        self.results["energy"] += self.base_calc.results["energy"]
+        self.results["energy"] += self.base_calc.results["energy"] - self.offset
         self.results["forces"] += self.base_calc.results["forces"]
         self.results["stress"] += self.base_calc.results["stress"]
         
@@ -165,7 +165,7 @@ class DeltaML_Calculator(Calculator):
     @staticmethod
     def from_dict(dct, base_calc = None):
         sgp, _ = SGP_Wrapper.from_dict(dct["gp_model"])
-        calc = DeltaML_Calculator(sgp, base_calculator=base_calc, use_mapping=dct["use_mapping"])
+        calc = DeltaML_Calculator(sgp, base_calculator=base_calc, use_mapping=dct["use_mapping"], offset=dct['offset'])
         calc.results = dct["results"]
         return calc
 
@@ -180,7 +180,9 @@ class DeltaML_Calculator(Calculator):
         sgp, kernels = SGP_Calculator.from_file(name)
         with open(name, "r") as f:
             gp_dict = json.loads(f.readline())
-        calc = DeltaML_Calculator(sgp, base_calculator=base_calc, use_mapping=gp_dict["use_mapping"])
+        print("File: ", name)
+        print("GP Dict offset: ", gp_dict['offset'])
+        calc = DeltaML_Calculator(sgp, base_calculator=base_calc, use_mapping=gp_dict["use_mapping"], offset=gp_dict['offset'])
 
         return calc, kernels
 

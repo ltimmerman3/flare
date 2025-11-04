@@ -131,7 +131,7 @@ class OTF:
         md_kwargs,
         flare_calc=None,
         trajectory=None,
-        delta=False,
+        delta_ML=False,
         # md args
         prev_pos_init: "ndarray" = None,
         rescale_steps: List[int] = [],
@@ -186,24 +186,24 @@ class OTF:
         else:
             raise NotImplementedError(md_engine + " is not implemented in ASE")
 
-        timestep = dt * units.fs * 1e3  # convert pico-second to ASE timestep units
+        self.timestep = dt * units.fs * 1e3  # convert pico-second to ASE timestep units
         if self.md_engine == "PyLAMMPS":
             md_kwargs["output_name"] = output_name
             if isinstance(self.atoms.calc, SGP_Calculator):
                 assert (
                     self.atoms.calc.gp_model.variance_type == "local"
                 ), "LAMMPS training only supports variance_type='local'"
-        if md_engine == "NoseHooverChainNVT":
-            temperature = md_kwargs.get('temperature', 473)
+        elif md_engine == "NoseHooverChainNVT":
+            temperature = md_kwargs.get('temperature_K', 473)
             tdamp = md_kwargs.get('tdamp', 10) * units.fs
             tchain = md_kwargs.get('tchain', 3)
             tloop = md_kwargs.get('tloop', 1)
             self.md = MD(
-                self.atoms, timestep, temperature, tdamp, tchain=tchain, tloop=tloop
+                self.atoms, self.timestep, temperature, tdamp, tchain=tchain, tloop=tloop
             )
         else:
             self.md = MD(
-                atoms=self.atoms, timestep=timestep, trajectory=trajectory, **md_kwargs
+                atoms=self.atoms, timestep=self.timestep, trajectory=trajectory, **md_kwargs
             )
 
         self.flare_calc = self.atoms.calc
@@ -215,7 +215,7 @@ class OTF:
         self.dft_frames = []
         
         # set delta-ML
-        self.delta_ML = delta
+        self.delta_ML = delta_ML
         if self.delta_ML:
             assert isinstance(self.flare_calc, DeltaML_Calculator)
 
@@ -410,7 +410,7 @@ class OTF:
                     dft_energy = train_energy = self.atoms.potential_energy
                     
                     if self.delta_ML:
-                        train_energy -= self.flare_calc.base_calc.results["energy"]
+                        train_energy -= (self.flare_calc.base_calc.results["energy"] - self.flare_calc.offset)
                         train_forces -= self.flare_calc.base_calc.results["forces"]
                         train_stress -= self.flare_calc.base_calc.results["stress"]
 
@@ -515,7 +515,7 @@ class OTF:
         
         if self.delta_ML:
             base_energy, base_forces, base_stress = self.run_base_calc()
-            train_energy -= base_energy
+            train_energy -= (base_energy - self.flare_calc.offset)
             train_frcs -= base_forces
             train_stress -= base_stress
 
@@ -571,7 +571,7 @@ class OTF:
         # Update previous positions.
         self.atoms.prev_positions = np.copy(self.atoms.positions)
 
-        # Reset FLARE calculator.
+        # Reset FLARE calculator. Maybe necessary after doing dft?
         if self.dft_step:
             self.flare_calc.reset()
             self.atoms.calc = self.flare_calc
@@ -622,7 +622,8 @@ class OTF:
         f.info("\nCalling DFT...\n")
 
         # avoid duplicating a previous DFT calculation
-        self.dft_calc.reset()
+        # I don't think this is the best way to do this, removing the reset
+        # self.dft_calc.reset()
         self.atoms.calc = self.dft_calc
         self.atoms.get_forces()
 
@@ -655,8 +656,9 @@ class OTF:
         f = logging.getLogger(self.output.basename + "log")
         f.info("\nCalling base calculation for delta ML...\n")
         
-        self.flare_calc.base_calc.reset()
-        self.flare_calc.base_calc.calculate(self.atoms)
+        # Reset does not work with sum calculator
+        # self.flare_calc.base_calc.reset()
+        self.flare_calc.base_calc.calculate(self.atoms, ['energy', 'forces', 'stress'], [])
         base_energy = self.flare_calc.base_calc.results["energy"]
         base_forces = self.flare_calc.base_calc.results["forces"]
         base_stress = self.flare_calc.base_calc.results["stress"]
@@ -807,6 +809,16 @@ class OTF:
             if self.md_engine in ["NVTBerendsen", "NPTBerendsen", "NPT", "Langevin"]:
                 self.md.set_temperature(temperature_K=new_temp)
                 self.md_kwargs["temperature"] = new_temp * units.kB
+            elif self.md_engine == "NoseHooverChainNVT":
+                MD = NoseHooverChainNVT
+                temperature = new_temp
+                self.md_kwargs["temperature_K"] = new_temp
+                tdamp = self.md_kwargs.get('tdamp', 10) * units.fs
+                tchain = self.md_kwargs.get('tchain', 3)
+                tloop = self.md_kwargs.get('tloop', 1)
+                self.md = MD(
+                    self.atoms, self.timestep, temperature, tdamp, tchain=tchain, tloop=tloop
+                )
 
     def update_temperature(self):
         """Updates the instantaneous temperatures of the system."""
@@ -936,7 +948,7 @@ class OTF:
         return dct
 
     @staticmethod
-    def from_dict(dct, base_calc=None, atoms=None):
+    def from_dict(dct, dft_calc, base_calc=None, atoms=None):
         flare_calc_dict = json.load(open(dct["flare_calc"]))
 
         # Build FLARE_Calculator from dict
@@ -964,13 +976,7 @@ class OTF:
         else:
             dct["atoms"] = atoms
         dct["flare_calc"] = flare_calc
-
-        try:
-            with open(dct["dft_calc"], "rb") as f:
-                dct["dft_calc"] = pickle.load(f)
-        except:
-            with open(dct["dft_calc"] + ".json", "r") as f:
-                dct["dft_calc"] = json.loads(f.readline())
+        dct["dft_calc"] = dft_calc
 
         new_otf = OTF(**dct)
         new_otf._kernels = _kernels
@@ -978,6 +984,7 @@ class OTF:
         new_otf.curr_step = dct["curr_step"]
         new_otf.std_tolerance = dct["std_tolerance"]
 
+        # Is this causing an issue? Not initializing for ase based MD?
         if new_otf.md_engine == "NPT":
             if not new_otf.md.initialized:
                 new_otf.md.initialize()
@@ -1001,8 +1008,8 @@ class OTF:
             json.dump(self.as_dict(), f, cls=NumpyEncoder)
 
     @classmethod
-    def from_checkpoint(cls, filename, base_calc=None, atoms=None):
+    def from_checkpoint(cls, filename, dft_calc, base_calc=None, atoms=None):
         with open(filename, "r") as f:
-            otf_model = cls.from_dict(json.loads(f.readline()), base_calc=base_calc, atoms=atoms)
+            otf_model = cls.from_dict(json.loads(f.readline()), dft_calc, base_calc=base_calc, atoms=atoms)
 
         return otf_model

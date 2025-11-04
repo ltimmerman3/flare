@@ -5,6 +5,7 @@ import pkgutil
 import importlib
 import inspect
 import numpy as np
+import pickle
 
 from flare.learners.otf import OTF
 from flare.md.fake import FakeDFT
@@ -255,7 +256,7 @@ def get_sgp_calc(flare_config):
                 flare_calc = SGP_Calculator(sgp)
         if delta:
             mace_calc = mace_mp(model=mace_path, dispersion=dispersion, default_dtype="float32", device='cpu')
-            delta_calc = DeltaML_Calculator(flare_calc, base_calculator=mace_calc)
+            delta_calc = DeltaML_Calculator(flare_calc, base_calculator=mace_calc, offset=flare_config.get('offset', 0.0))
             return delta_calc, kernels
         return flare_calc, kernels
 
@@ -365,7 +366,7 @@ def get_sgp_calc(flare_config):
     
     if delta:
         mace_calc = mace_mp(model=mace_path, dispersion=dispersion, default_dtype="float32", device='cpu')
-        delta_calc = DeltaML_Calculator(flare_calc, base_calculator=mace_calc)
+        delta_calc = DeltaML_Calculator(flare_calc, base_calculator=mace_calc, offset=flare_config.get('offset', 0.0))
         return delta_calc, kernels
     return flare_calc, kernels
 
@@ -415,10 +416,20 @@ def restart_otf(config):
         atoms = None
     if otf_config.get("mace_path", None) is not None:
         from mace.calculators import mace_mp
-        base_calc = mace_mp(model=otf_config["mace_path"], dispersion=False, default_dtype="float32", device='cpu')
+        base_calc = mace_mp(model=otf_config["mace_path"], dispersion=otf_config.get('dispersion', False), default_dtype="float32", device='cpu')
     else:
         base_calc = None
-    otf = OTF.from_checkpoint(checkpoint, base_calc=base_calc, atoms=atoms)
+    with open(checkpoint, 'r') as f:
+        dct = json.loads(f.readline())
+    try:
+        with open(dct["dft_calc"], "rb") as f:
+            dft_calc = pickle.load(f)
+    except:
+        with open(dct["dft_calc"] + ".json", "r") as f:
+            dft_calc_kwargs = json.loads(f.readline())
+        from sparc.calculator import SPARC
+        dft_calc = SPARC(**dft_calc_kwargs)
+    otf = OTF.from_checkpoint(checkpoint, dft_calc, base_calc=base_calc, atoms=atoms)
 
     # allow modification of some parameters
     for attr in [
@@ -431,7 +442,7 @@ def restart_otf(config):
     ]:
         if attr in otf_config:
             setattr(otf, attr, otf_config.get(attr))
-
+    
     otf.run()
 
 

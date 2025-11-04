@@ -1,0 +1,2 @@
+Easiest to compile with conda based compilers. Otherwise, numpy backends get messed up trying to link different 
+versions of mkl since numpy has it's own compilation instructions etc.
