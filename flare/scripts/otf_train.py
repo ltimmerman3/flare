@@ -91,6 +91,7 @@ def get_dft_calc(dft_config):
         return dft_calc
     elif dft_calc_name == "SPARC":
         from sparc.calculator import SPARC
+        dft_calc_kwargs.update({'use_socket': True})
         dft_calc = SPARC(**dft_calc_kwargs)
         return dft_calc
     elif dft_calc_name == "MACE":
@@ -236,7 +237,7 @@ def get_sgp_calc(flare_config):
     from flare.bffs.sgp import SGP_Wrapper
     from flare.bffs.sgp.calculator import SGP_Calculator
     
-    delta = flare_config.get("delta", False)
+    delta = flare_config.get("delta_ML", False)
     mace_path = flare_config.get("mace_path", None)
     dispersion = flare_config.get("d3", False)
     if delta:
@@ -428,6 +429,7 @@ def restart_otf(config):
         with open(dct["dft_calc"] + ".json", "r") as f:
             dft_calc_kwargs = json.loads(f.readline())
         from sparc.calculator import SPARC
+        dft_calc_kwargs.update({'use_socket': True})
         dft_calc = SPARC(**dft_calc_kwargs)
     otf = OTF.from_checkpoint(checkpoint, dft_calc, base_calc=base_calc, atoms=atoms)
 
